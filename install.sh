@@ -62,48 +62,88 @@ install_compose() {
   COMPOSE="docker-compose"
 }
 
-# ================== INTERACTIVE ==================
-echo -e "${PURPLE}🧩 Configuração interativa${RESET}"
+# ================== INTERACTIVE SETUP ==================
+clear
+echo -e "${DEEP_PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo -e "${PURPLE}   🧩 CONFIGURAÇÃO DO PTERODACTYL PANEL${RESET}"
+echo -e "${DEEP_PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo
-echo "🌐 Como você quer expor o painel?"
-echo "1) Cloudflare Tunnel (sem abrir portas)"
-echo "2) DNS / IP / Localhost"
-read -rp "Escolha [1-2]: " EXPOSE_MODE
 
-# Admin email
-DEFAULT_EMAIL="admin@localhost"
-read -rp "📧 Email do administrador [$DEFAULT_EMAIL]: " ADMIN_EMAIL
-ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_EMAIL}"
-
-# Database password
+# -------- EXPOSIÇÃO --------
+echo -e "${PURPLE}🌐 MODO DE EXPOSIÇÃO DO PAINEL${RESET}"
 echo
-echo "🔐 Senha do banco de dados (ENTER para gerar)"
-read -rsp "👉 Senha: " DB_PASS
+echo "  [1] ☁️  Cloudflare Tunnel  (sem abrir portas)"
+echo "  [2] 🌍 DNS / IP / Localhost"
+echo
+read -rp "👉 Escolha uma opção [1-2]: " EXPOSE_MODE
+echo
+
+# -------- ADMIN --------
+echo -e "${PURPLE}👤 CONTA ADMINISTRADOR${RESET}"
+echo
+read -rp "👉 Email do administrador [admin@localhost]: " ADMIN_EMAIL
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
+echo
+
+# -------- DATABASE --------
+echo -e "${PURPLE}🗄️  BANCO DE DADOS${RESET}"
+echo "   Pressione ENTER para gerar uma senha segura automaticamente"
+echo
+read -rsp "👉 Senha do banco de dados: " DB_PASS
 echo
 if [ -z "$DB_PASS" ]; then
   DB_PASS=$(openssl rand -hex 16)
-  echo "🔑 Senha gerada automaticamente"
+  echo "🔐 Senha gerada automaticamente"
 fi
+echo
 
-# Exposure logic
+# -------- CLOUDFLARE --------
 if [ "$EXPOSE_MODE" = "1" ]; then
   USE_CF=true
-  read -rp "🌐 Domínio do painel (https://painel.seudominio.com): " APP_URL
 
-  if [[ "$APP_URL" == *localhost* || "$APP_URL" == *127.0.0.1* ]]; then
-    echo "❌ Tunnel exige domínio válido"
-    exit 1
-  fi
-
-  read -rp "🔑 Token do Cloudflare Tunnel: " CLOUDFLARED_TOKEN
+  echo -e "${PURPLE}☁️  CLOUDFLARE TUNNEL${RESET}"
+  echo
+  read -rp "👉 Domínio do painel (https://painel.seudominio.com): " APP_URL
+  echo
+  read -rp "👉 Token do Cloudflare Tunnel: " CLOUDFLARED_TOKEN
   PANEL_PORT=80
 else
   USE_CF=false
-  DEFAULT_URL="http://localhost:8030"
-  read -rp "🌐 URL do painel [$DEFAULT_URL]: " APP_URL
-  APP_URL="${APP_URL:-$DEFAULT_URL}"
+
+  echo -e "${PURPLE}🌍 ACESSO DIRETO${RESET}"
+  echo
+  read -rp "👉 URL do painel [http://localhost:8030]: " APP_URL
+  APP_URL="${APP_URL:-http://localhost:8030}"
   PANEL_PORT=8030
 fi
+
+# -------- RESUMO --------
+echo
+echo -e "${DEEP_PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo -e "${PURPLE}📋 RESUMO DA CONFIGURAÇÃO${RESET}"
+echo -e "${DEEP_PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo
+echo " 🌐 URL do Painel : $APP_URL"
+echo " 📧 Admin Email  : $ADMIN_EMAIL"
+echo " 🔐 DB Password : ********"
+if [ "$USE_CF" = true ]; then
+  echo " ☁️ Cloudflare  : Ativado"
+else
+  echo " 🌍 Cloudflare  : Desativado"
+fi
+echo
+read -rp "✅ Deseja continuar com a instalação? (Y/n): " CONFIRM
+CONFIRM="${CONFIRM:-Y}"
+
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+  echo
+  echo "❌ Instalação cancelada pelo usuário."
+  exit 0
+fi
+
+echo
+echo -e "${PURPLE}🚀 Iniciando instalação...${RESET}"
+echo
 
 # ================== CONFIRM ==================
 echo
