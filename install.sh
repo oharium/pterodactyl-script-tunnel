@@ -1,114 +1,168 @@
 #!/bin/bash
-
 set -e
 
-######################################################################################
-#                                                                                    #
-# Project 'pterodactyl-installer'                                                    #
-#                                                                                    #
-# Copyright (C) 2018 - 2026, Vilhelm Prytz, <vilhelm@prytznet.se>                    #
-#                                                                                    #
-#   This program is free software: you can redistribute it and/or modify             #
-#   it under the terms of the GNU General Public License as published by             #
-#   the Free Software Foundation, either version 3 of the License, or                #
-#   (at your option) any later version.                                              #
-#                                                                                    #
-#   This program is distributed in the hope that it will be useful,                  #
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of                   #
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the                    #
-#   GNU General Public License for more details.                                     #
-#                                                                                    #
-#   You should have received a copy of the GNU General Public License                #
-#   along with this program.  If not, see <https://www.gnu.org/licenses/>.           #
-#                                                                                    #
-# https://github.com/pterodactyl-installer/pterodactyl-installer/blob/master/LICENSE #
-#                                                                                    #
-# This script is not associated with the official Pterodactyl Project.               #
-# https://github.com/pterodactyl-installer/pterodactyl-installer                     #
-#                                                                                    #
-######################################################################################
+# ================== COLORS ==================
+DEEP_PURPLE="\e[38;5;55m"
+PURPLE="\e[38;5;93m"
+RESET="\e[0m"
 
-export GITHUB_SOURCE="v1.2.0"
-export SCRIPT_RELEASE="v1.2.0"
-export GITHUB_BASE_URL="https://raw.githubusercontent.com/pterodactyl-installer/pterodactyl-installer"
+# ================== BANNER ==================
+clear
+echo -e "${DEEP_PURPLE}██╗  ██╗ █████╗ ██████╗ ██╗██╗   ██╗███╗   ███╗${RESET}"
+echo -e "${DEEP_PURPLE}██║  ██║██╔══██╗██╔══██╗██║██║   ██║████╗ ████║${RESET}"
+echo -e "${DEEP_PURPLE}███████║███████║██████╔╝██║██║   ██║██╔████╔██║${RESET}"
+echo -e "${DEEP_PURPLE}██╔══██║██╔══██║██╔══██╗██║██║   ██║██║╚██╔╝██║${RESET}"
+echo -e "${DEEP_PURPLE}██║  ██║██║  ██║██║  ██║██║╚██████╔╝██║ ╚═╝ ██║${RESET}"
+echo -e "${DEEP_PURPLE}╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝${RESET}"
+echo -e "${PURPLE}    Installer by Harium | Cloudflare & Codespace Edition${RESET}\n"
 
-LOG_PATH="/var/log/pterodactyl-installer.log"
-
-# check for curl
-if ! [ -x "$(command -v curl)" ]; then
-  echo "* curl is required in order for this script to work."
-  echo "* install using apt (Debian and derivatives) or yum/dnf (CentOS)"
+# ================== ROOT ==================
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Execute como root (sudo)"
   exit 1
 fi
 
-# Always remove lib.sh, before downloading it
-[ -f /tmp/lib.sh ] && rm -rf /tmp/lib.sh
-curl -sSL -o /tmp/lib.sh "$GITHUB_BASE_URL"/master/lib/lib.sh
-# shellcheck source=lib/lib.sh
-source /tmp/lib.sh
+# ================== SYSTEM ==================
+OS="$(lsb_release -si 2>/dev/null || echo unknown)"
 
-execute() {
-  echo -e "\n\n* pterodactyl-installer $(date) \n\n" >>$LOG_PATH
-
-  [[ "$1" == *"canary"* ]] && export GITHUB_SOURCE="master" && export SCRIPT_RELEASE="canary"
-  update_lib_source
-  run_ui "${1//_canary/}" |& tee -a $LOG_PATH
-
-  if [[ -n $2 ]]; then
-    echo -e -n "* Installation of $1 completed. Do you want to proceed to $2 installation? (y/N): "
-    read -r CONFIRM
-    if [[ "$CONFIRM" =~ [Yy] ]]; then
-      execute "$2"
-    else
-      error "Installation of $2 aborted."
-      exit 1
-    fi
+# ================== DOCKER INSTALL ==================
+install_docker() {
+  if command -v docker >/dev/null 2>&1; then
+    echo "🐳 Docker já instalado"
+    return
   fi
+
+  echo "🐳 Instalando Docker..."
+  apt update
+  apt install -y ca-certificates curl gnupg lsb-release
+
+  curl -fsSL https://get.docker.com | sh
+  systemctl start docker || true
+  systemctl enable docker || true
+
+  echo "✅ Docker instalado"
 }
 
-welcome ""
+# ================== DOCKER COMPOSE ==================
+install_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE="docker compose"
+    return
+  fi
 
-done=false
-while [ "$done" == false ]; do
-  options=(
-    "Install the panel"
-    "Install Wings"
-    "Install both [0] and [1] on the same machine (wings script runs after panel)"
-    # "Uninstall panel or wings\n"
+  if command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE="docker-compose"
+    return
+  fi
 
-    "Install panel with canary version of the script (the versions that lives in master, may be broken!)"
-    "Install Wings with canary version of the script (the versions that lives in master, may be broken!)"
-    "Install both [3] and [4] on the same machine (wings script runs after panel)"
-    "Uninstall panel or wings with canary version of the script (the versions that lives in master, may be broken!)"
-  )
+  echo "📦 Instalando Docker Compose..."
+  curl -L https://github.com/docker/compose/releases/download/2.27.0/docker-compose-linux-x86_64 \
+    -o /usr/local/bin/docker-compose
+  chmod +x /usr/local/bin/docker-compose
+  COMPOSE="docker-compose"
+}
 
-  actions=(
-    "panel"
-    "wings"
-    "panel;wings"
-    # "uninstall"
+# ================== INPUTS ==================
+read -rp "🌐 URL do Painel (ex: https://panel.seudominio.com): " APP_URL
+read -rp "📧 Email do administrador: " ADMIN_EMAIL
+read -rp "🔐 Senha do banco de dados: " DB_PASS
 
-    "panel_canary"
-    "wings_canary"
-    "panel_canary;wings_canary"
-    "uninstall_canary"
-  )
+echo
+read -rp "☁️ Usar Cloudflare Tunnel? (y/N): " USE_CF
 
-  output "What would you like to do?"
+if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
+  read -rp "🔑 Cole o TOKEN do Cloudflare Tunnel: " CLOUDFLARED_TOKEN
+fi
 
-  for i in "${!options[@]}"; do
-    output "[$i] ${options[$i]}"
-  done
+# ================== INSTALL ==================
+install_docker
+install_compose
 
-  echo -n "* Input 0-$((${#actions[@]} - 1)): "
-  read -r action
+# ================== SETUP ==================
+mkdir -p /opt/pterodactyl/panel
+cd /opt/pterodactyl/panel
 
-  [ -z "$action" ] && error "Input is required" && continue
+mkdir -p data/{database,var,logs}
 
-  valid_input=("$(for ((i = 0; i <= ${#actions[@]} - 1; i += 1)); do echo "${i}"; done)")
-  [[ ! " ${valid_input[*]} " =~ ${action} ]] && error "Invalid option"
-  [[ " ${valid_input[*]} " =~ ${action} ]] && done=true && IFS=";" read -r i1 i2 <<<"${actions[$action]}" && execute "$i1" "$i2"
-done
+# ================== DOCKER COMPOSE FILE ==================
+cat <<EOF > docker-compose.yml
+version: "3.8"
 
-# Remove lib.sh, so next time the script is run the, newest version is downloaded.
-rm -rf /tmp/lib.sh
+services:
+  database:
+    image: mariadb:10.5
+    restart: always
+    environment:
+      MYSQL_DATABASE: panel
+      MYSQL_USER: pterodactyl
+      MYSQL_PASSWORD: ${DB_PASS}
+      MYSQL_ROOT_PASSWORD: ${DB_PASS}
+    volumes:
+      - ./data/database:/var/lib/mysql
+
+  cache:
+    image: redis:alpine
+    restart: always
+
+  panel:
+    image: ghcr.io/pterodactyl/panel:latest
+    restart: always
+    depends_on:
+      - database
+      - cache
+    ports:
+      - "8030:80"
+    environment:
+      APP_URL: ${APP_URL}
+      APP_TIMEZONE: UTC
+      APP_SERVICE_AUTHOR: ${ADMIN_EMAIL}
+      TRUSTED_PROXIES: "*"
+      DB_HOST: database
+      DB_PORT: 3306
+      DB_DATABASE: panel
+      DB_USERNAME: pterodactyl
+      DB_PASSWORD: ${DB_PASS}
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      QUEUE_DRIVER: redis
+      REDIS_HOST: cache
+      APP_ENV: production
+    volumes:
+      - ./data/var:/app/var
+      - ./data/logs:/app/storage/logs
+EOF
+
+# ================== START ==================
+echo "🚀 Iniciando containers..."
+$COMPOSE up -d
+
+sleep 10
+
+# ================== ADMIN ==================
+echo "👤 Criando administrador..."
+$COMPOSE run --rm panel php artisan p:user:make \
+  --email="$ADMIN_EMAIL" \
+  --username=admin \
+  --name-first=Admin \
+  --name-last=User \
+  --admin=1
+
+# ================== CLOUDFLARED ==================
+if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
+  echo "☁️ Instalando Cloudflared..."
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+      -o cloudflared
+    chmod +x cloudflared
+    mv cloudflared /usr/local/bin/cloudflared
+  fi
+
+  cloudflared tunnel run --token "$CLOUDFLARED_TOKEN" >/tmp/cloudflared.log 2>&1 &
+fi
+
+# ================== DONE ==================
+echo
+echo -e "${PURPLE}✅ Pterodactyl instalado com sucesso!${RESET}"
+echo -e "${PURPLE}🌐 Painel: http://localhost:8030${RESET}"
+echo -e "${PURPLE}☁️ Cloudflare ativo se configurado${RESET}"
