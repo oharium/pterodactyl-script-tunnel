@@ -22,6 +22,19 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# ================== SYSTEM UPDATE ==================
+echo "🔄 Verificando atualizações do sistema..."
+
+apt update -y
+
+UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -c upgradable || true)
+
+if [ "$UPGRADABLE" -gt 0 ]; then
+  echo "⬆️ $UPGRADABLE pacotes podem ser atualizados. Atualizando..."
+  apt upgrade -y
+else
+  echo "✅ Sistema já está atualizado"
+fi
 # ================== SYSTEM ==================
 OS="$(lsb_release -si 2>/dev/null || echo unknown)"
 
