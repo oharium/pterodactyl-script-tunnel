@@ -75,16 +75,61 @@ install_compose() {
   COMPOSE="docker-compose"
 }
 
-# ================== INPUTS ==================
-read -rp "🌐 URL do Painel (ex: https://panel.seudominio.com): " APP_URL
-read -rp "📧 Email do administrador: " ADMIN_EMAIL
-read -rp "🔐 Senha do banco de dados: " DB_PASS
-
+# ================== INTERACTIVE SETUP ==================
+echo -e "${PURPLE}🧩 Configuração interativa do Pterodactyl${RESET}"
 echo
-read -rp "☁️ Usar Cloudflare Tunnel? (y/N): " USE_CF
+
+# ---------- Painel URL ----------
+DEFAULT_URL="http://localhost:8030"
+read -rp "🌐 URL do Painel [$DEFAULT_URL]: " APP_URL
+APP_URL="${APP_URL:-$DEFAULT_URL}"
+
+# ---------- Admin Email ----------
+DEFAULT_EMAIL="admin@localhost"
+read -rp "📧 Email do administrador [$DEFAULT_EMAIL]: " ADMIN_EMAIL
+ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_EMAIL}"
+
+# ---------- Database Password ----------
+echo
+echo "🔐 Senha do banco de dados"
+echo "   (pressione ENTER para gerar automaticamente)"
+read -rsp "👉 Senha: " DB_PASS
+echo
+if [ -z "$DB_PASS" ]; then
+  DB_PASS=$(openssl rand -hex 16)
+  echo "🔑 Senha gerada automaticamente"
+fi
+
+# ---------- Cloudflare ----------
+echo
+read -rp "☁️ Deseja usar Cloudflare Tunnel? (y/N): " USE_CF
 
 if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
-  read -rp "🔑 Cole o TOKEN do Cloudflare Tunnel: " CLOUDFLARED_TOKEN
+  echo
+  echo "🔑 Cloudflare Tunnel Token"
+  echo "   (exemplo: eyJhIjoiYjEzYTUzZDBkN2RkYzExM2Y3NGY0MGZmNDBmZjdiMDUi...)"
+  read -rp "👉 Token: " CLOUDFLARED_TOKEN
+fi
+
+# ---------- CONFIRMATION ----------
+echo
+echo -e "${PURPLE}📋 Resumo da configuração:${RESET}"
+echo "🌐 URL do Painel: $APP_URL"
+echo "📧 Email Admin:   $ADMIN_EMAIL"
+echo "🔐 DB Password:  ********"
+if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
+  echo "☁️ Cloudflare:   Ativado"
+else
+  echo "☁️ Cloudflare:   Desativado"
+fi
+
+echo
+read -rp "✅ Continuar com a instalação? (Y/n): " CONFIRM
+CONFIRM="${CONFIRM:-Y}"
+
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+  echo "❌ Instalação cancelada pelo usuário"
+  exit 0
 fi
 
 # ================== INSTALL ==================
