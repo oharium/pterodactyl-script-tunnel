@@ -2,16 +2,32 @@
 
 set -e
 
-# ===== UI COLORS =====
+######################################################################################
+#                                                                                    #
+# Project 'pterodactyl-installer' - HARIUM EDITION                                   #
+#                                                                                    #
+# Modified by Harium to support Cloudflare Tunnels and Codespace Environments.       #
+#                                                                                    #
+######################################################################################
+
+# ===== CORES E ESTILO =====
 PURPLE="\033[35m"
 DEEP_PURPLE="\033[38;5;93m"
-GRAY="\033[90m"
 CYAN="\033[36m"
 RESET="\033[0m"
 
-# ===== CONFIGURAÇÕES =====
+export GITHUB_SOURCE="v1.2.0"
+export SCRIPT_RELEASE="v1.2.1-harium"
 export GITHUB_BASE_URL="https://raw.githubusercontent.com/pterodactyl-installer/pterodactyl-installer"
+LOG_PATH="/var/log/pterodactyl-installer.log"
 
+# ===== DETECÇÃO DE AMBIENTE =====
+IS_CODESPACE=false
+if [[ -n "$CODESPACES" ]] || [[ -d "/workspaces" ]]; then
+    IS_CODESPACE=true
+fi
+
+# ===== BANNER HARIUM =====
 clear
 echo -e "${DEEP_PURPLE}██╗  ██╗ █████╗ ██████╗ ██╗██╗   ██╗███╗   ███╗${RESET}"
 echo -e "${DEEP_PURPLE}██║  ██║██╔══██╗██╔══██╗██║██║   ██║████╗ ████║${RESET}"
@@ -19,90 +35,112 @@ echo -e "${DEEP_PURPLE}███████║███████║███
 echo -e "${DEEP_PURPLE}██╔══██║██╔══██║██╔══██╗██║██║   ██║██║╚██╔╝██║${RESET}"
 echo -e "${DEEP_PURPLE}██║  ██║██║  ██║██║  ██║██║╚██████╔╝██║ ╚═╝ ██║${RESET}"
 echo -e "${DEEP_PURPLE}╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝     ╚═╝${RESET}"
-echo -e "${PURPLE}    Installer by Harium | Cloudflare Edition (FULL FIX)${RESET}\n"
+echo -e "${PURPLE}    Installer by Harium | Cloudflare & Codespace Edition${RESET}\n"
 
-# ===== PERGUNTA CLOUDFLARE =====
-CF_TUNNEL_TOKEN=""
-echo -e "${DEEP_PURPLE}◆${RESET} Deseja usar ${PURPLE}Cloudflare Tunnel${RESET}? (y/N): "
-read -r USE_CF
-if [[ "$USE_CF" =~ [Yy] ]]; then
-    echo -e "${PURPLE}▶ Cole seu Cloudflare Tunnel Token:${RESET}"
-    read -r CF_TUNNEL_TOKEN
+if [ "$IS_CODESPACE" = true ]; then
+    echo -e "${CYAN}[!] Ambiente detectado: GitHub Codespace${RESET}"
+else
+    echo -e "${CYAN}[!] Ambiente detectado: VPS/Servidor Padrão${RESET}"
 fi
 
-# ===== FUNÇÃO DE CORREÇÃO (Onde resolvemos o erro do Composer) =====
-fix_environment() {
-    echo -e "${CYAN}▶ Instalando extensões PHP faltantes...${RESET}"
-    
-    # Instala exatamente o que o Composer pediu (e o sodium/bcmath)
-    apt-get update -q
-    apt-get install -y php8.3-mysql php8.3-zip php8.3-bcmath php8.3-common php8.3-fpm php8.3-curl php8.3-mbstring php8.3-xml php8.3-gd libsodium-dev < /dev/null
+# Check for curl
+if ! [ -x "$(command -v curl)" ]; then
+  echo "* curl is required in order for this script to work."
+  exit 1
+fi
 
-    if [ -d "/var/www/pterodactyl" ]; then
-        echo -e "${CYAN}▶ Forçando dependências do Composer...${RESET}"
-        cd /var/www/pterodactyl
-        export COMPOSER_ALLOW_SUPERUSER=1
-        
-        # O pulo do gato: --ignore-platform-reqs faz ele instalar mesmo com o erro do PHP local do Codespace
-        composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
-        
-        # Configurações do Painel
-        [ ! -f .env ] && cp .env.example .env
-        php artisan key:generate --force || true
-        
-        # Ajuste Nginx
-        [ -f /etc/nginx/sites-available/pterodactyl.conf ] && sed -i 's/php[0-9.]*-fpm.sock/php8.3-fpm.sock/g' /etc/nginx/sites-available/pterodactyl.conf
-        
-        chown -R www-data:www-data /var/www/pterodactyl/*
-        chmod -R 775 storage/* bootstrap/cache/
-    fi
-
-    # Inicia os serviços no braço
-    mkdir -p /run/php/
-    service php8.3-fpm restart || /usr/sbin/php-fpm8.3 --fpm-config /etc/php/8.3/fpm/php-fpm.conf || true
-    service nginx restart || true
-    service mysql start || true
+# ===== FUNÇÃO DE PRÉ-REQUISITOS (EVITA ERROS DE DEPENDÊNCIA) =====
+prepare_system() {
+    echo -e "${CYAN}* Preparando dependências do sistema...${RESET}"
+    sudo apt-get update -y -q
+    # Instala o essencial que o Codespace não tem por padrão para o PHP 8.3
+    sudo apt-get install -y php8.3-mysql php8.3-zip php8.3-bcmath php8.3-common php8.3-fpm php8.3-curl php8.3-mbstring php8.3-xml php8.3-gd libsodium-dev unzip composer < /dev/null
 }
 
-install_cloudflared() {
-    if [[ -n "$CF_TUNNEL_TOKEN" ]]; then
-        echo -e "${PURPLE}◆ Instalando Cloudflared...${RESET}"
-        ARCH=$(dpkg --print-architecture)
-        wget -q -O /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH.deb"
-        dpkg -i /tmp/cloudflared.deb || apt-get install -f -y
-        cloudflared service install "$CF_TUNNEL_TOKEN" || true
+# ===== FUNÇÃO CLOUDFLARE TUNNEL =====
+install_cloudflare() {
+    echo -e -n "\n${PURPLE}* Deseja instalar o Cloudflare Tunnel para este serviço? (y/N): ${RESET}"
+    read -r CONFIRM_CF
+    if [[ "$CONFIRM_CF" =~ [Yy] ]]; then
+        echo -e "${PURPLE}* Insira seu Cloudflare Tunnel Token:${RESET}"
+        read -r CF_TOKEN
+        if [[ -n "$CF_TOKEN" ]]; then
+            ARCH=$(dpkg --print-architecture)
+            wget -q -O /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH.deb"
+            sudo dpkg -i /tmp/cloudflared.deb
+            sudo cloudflared service install "$CF_TOKEN" || true
+            echo -e "${CYAN}* Cloudflare Tunnel configurado!${RESET}"
+        fi
     fi
 }
 
+# ===== EXECUÇÃO PRINCIPAL =====
 execute() {
-    # Roda o oficial
-    bash <(curl -sL https://debian.pterodactyl-installer.se) --$1
-    # Aplica nossa correção
-    fix_environment
-    # Se for painel, bota o tunnel
-    if [[ "$1" == *"panel"* ]]; then
-        install_cloudflared
+  echo -e "\n\n* pterodactyl-installer-harium $(date) \n\n" >>$LOG_PATH
+  
+  # Preparar sistema antes de rodar o oficial
+  prepare_system
+
+  # Download lib.sh original
+  [ -f /tmp/lib.sh ] && rm -rf /tmp/lib.sh
+  curl -sSL -o /tmp/lib.sh "$GITHUB_BASE_URL"/master/lib/lib.sh
+  source /tmp/lib.sh
+
+  [[ "$1" == *"canary"* ]] && export GITHUB_SOURCE="master" && export SCRIPT_RELEASE="canary"
+  
+  # Rodar interface oficial
+  run_ui "${1//_canary/}" |& tee -a $LOG_PATH
+
+  # Se for instalação de painel, oferece o Cloudflare Tunnel ao final
+  if [[ "$1" == *"panel"* ]]; then
+      install_cloudflare
+  fi
+
+  if [[ -n $2 ]]; then
+    echo -e -n "\n* Instalação de $1 concluída. Deseja prosseguir para $2? (y/N): "
+    read -r CONFIRM
+    if [[ "$CONFIRM" =~ [Yy] ]]; then
+      execute "$2"
     fi
+  fi
 }
 
-# ===== MENU ORIGINAL RESTAURADO =====
-echo -e "${PURPLE}O que você deseja fazer?${RESET}"
-echo "[0] Install the Panel (Cloudflare Tunnel support)"
-echo "[1] Install Wings (Daemon)"
-echo "[2] Install Both (Panel & Wings)"
-echo "[3] Uninstall"
-echo -n "* Selecione 0-3: "
-read -r choice
+# Menu de Opções
+done=false
+while [ "$done" == false ]; do
+  options=(
+    "Instalar Painel Pterodactyl (Harium Fix)"
+    "Instalar Wings (Daemon)"
+    "Instalar Painel e Wings no mesmo servidor"
+    "Desinstalar Painel ou Wings"
+    "Instalar Versão Canary (Instável)"
+  )
 
-case $choice in
-    0) execute "panel" ;;
-    1) execute "wings" ;;
-    2) 
-        execute "panel"
-        execute "wings"
-        ;;
-    3) bash <(curl -sL https://debian.pterodactyl-installer.se) --uninstall ;;
-    *) echo "Opção inválida." ;;
-esac
+  actions=(
+    "panel"
+    "wings"
+    "panel;wings"
+    "uninstall"
+    "panel_canary"
+  )
 
-echo -e "\n${PURPLE}✔ Processo finalizado com sucesso!${RESET}"
+  echo -e "${PURPLE}O que você gostaria de fazer?${RESET}"
+  for i in "${!options[@]}"; do
+    echo -e "[$i] ${options[$i]}"
+  done
+
+  echo -n "* Selecione 0-$((${#actions[@]} - 1)): "
+  read -r action
+
+  if [[ -n "$action" ]] && [ "$action" -lt "${#actions[@]}" ]; then
+    done=true
+    IFS=";" read -r i1 i2 <<<"${actions[$action]}"
+    execute "$i1" "$i2"
+  else
+    echo -e "${DEEP_PURPLE}Opção inválida!${RESET}"
+  fi
+done
+
+# Limpeza final
+rm -rf /tmp/lib.sh
+echo -e "\n${PURPLE}✔ Finalizado com sucesso por Harium!${RESET}"
