@@ -24,21 +24,17 @@ fi
 
 # ================== SYSTEM UPDATE ==================
 echo "🔄 Verificando atualizações do sistema..."
-
 apt update -y
 
 UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -c upgradable || true)
-
 if [ "$UPGRADABLE" -gt 0 ]; then
-  echo "⬆️ $UPGRADABLE pacotes podem ser atualizados. Atualizando..."
+  echo "⬆️ Atualizando sistema..."
   apt upgrade -y
 else
   echo "✅ Sistema já está atualizado"
 fi
-# ================== SYSTEM ==================
-OS="$(lsb_release -si 2>/dev/null || echo unknown)"
 
-# ================== DOCKER INSTALL ==================
+# ================== DOCKER ==================
 install_docker() {
   if command -v docker >/dev/null 2>&1; then
     echo "🐳 Docker já instalado"
@@ -46,25 +42,16 @@ install_docker() {
   fi
 
   echo "🐳 Instalando Docker..."
-  apt update
   apt install -y ca-certificates curl gnupg lsb-release
-
   curl -fsSL https://get.docker.com | sh
-  systemctl start docker || true
   systemctl enable docker || true
-
-  echo "✅ Docker instalado"
+  systemctl start docker || true
 }
 
 # ================== DOCKER COMPOSE ==================
 install_compose() {
   if docker compose version >/dev/null 2>&1; then
     COMPOSE="docker compose"
-    return
-  fi
-
-  if command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE="docker-compose"
     return
   fi
 
@@ -75,24 +62,22 @@ install_compose() {
   COMPOSE="docker-compose"
 }
 
-# ================== INTERACTIVE SETUP ==================
-echo -e "${PURPLE}🧩 Configuração interativa do Pterodactyl${RESET}"
+# ================== INTERACTIVE ==================
+echo -e "${PURPLE}🧩 Configuração interativa${RESET}"
 echo
+echo "🌐 Como você quer expor o painel?"
+echo "1) Cloudflare Tunnel (sem abrir portas)"
+echo "2) DNS / IP / Localhost"
+read -rp "Escolha [1-2]: " EXPOSE_MODE
 
-# ---------- Painel URL ----------
-DEFAULT_URL="http://localhost:8030"
-read -rp "🌐 URL do Painel [$DEFAULT_URL]: " APP_URL
-APP_URL="${APP_URL:-$DEFAULT_URL}"
-
-# ---------- Admin Email ----------
+# Admin email
 DEFAULT_EMAIL="admin@localhost"
 read -rp "📧 Email do administrador [$DEFAULT_EMAIL]: " ADMIN_EMAIL
 ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_EMAIL}"
 
-# ---------- Database Password ----------
+# Database password
 echo
-echo "🔐 Senha do banco de dados"
-echo "   (pressione ENTER para gerar automaticamente)"
+echo "🔐 Senha do banco de dados (ENTER para gerar)"
 read -rsp "👉 Senha: " DB_PASS
 echo
 if [ -z "$DB_PASS" ]; then
@@ -100,37 +85,35 @@ if [ -z "$DB_PASS" ]; then
   echo "🔑 Senha gerada automaticamente"
 fi
 
-# ---------- Cloudflare ----------
-echo
-read -rp "☁️ Deseja usar Cloudflare Tunnel? (y/N): " USE_CF
+# Exposure logic
+if [ "$EXPOSE_MODE" = "1" ]; then
+  USE_CF=true
+  read -rp "🌐 Domínio do painel (https://painel.seudominio.com): " APP_URL
 
-if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
-  echo
-  echo "🔑 Cloudflare Tunnel Token"
-  echo "   (exemplo: eyJhIjoiYjEzYTUzZDBkN2RkYzExM2Y3NGY0MGZmNDBmZjdiMDUi...)"
-  read -rp "👉 Token: " CLOUDFLARED_TOKEN
-fi
+  if [[ "$APP_URL" == *localhost* || "$APP_URL" == *127.0.0.1* ]]; then
+    echo "❌ Tunnel exige domínio válido"
+    exit 1
+  fi
 
-# ---------- CONFIRMATION ----------
-echo
-echo -e "${PURPLE}📋 Resumo da configuração:${RESET}"
-echo "🌐 URL do Painel: $APP_URL"
-echo "📧 Email Admin:   $ADMIN_EMAIL"
-echo "🔐 DB Password:  ********"
-if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
-  echo "☁️ Cloudflare:   Ativado"
+  read -rp "🔑 Token do Cloudflare Tunnel: " CLOUDFLARED_TOKEN
+  PANEL_PORT=80
 else
-  echo "☁️ Cloudflare:   Desativado"
+  USE_CF=false
+  DEFAULT_URL="http://localhost:8030"
+  read -rp "🌐 URL do painel [$DEFAULT_URL]: " APP_URL
+  APP_URL="${APP_URL:-$DEFAULT_URL}"
+  PANEL_PORT=8030
 fi
 
+# ================== CONFIRM ==================
 echo
-read -rp "✅ Continuar com a instalação? (Y/n): " CONFIRM
+echo -e "${PURPLE}📋 Resumo:${RESET}"
+echo "URL: $APP_URL"
+echo "Admin: $ADMIN_EMAIL"
+echo "Cloudflare: $USE_CF"
+read -rp "Continuar? (Y/n): " CONFIRM
 CONFIRM="${CONFIRM:-Y}"
-
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-  echo "❌ Instalação cancelada pelo usuário"
-  exit 0
-fi
+[[ ! "$CONFIRM" =~ ^[Yy]$ ]] && exit 0
 
 # ================== INSTALL ==================
 install_docker
@@ -139,10 +122,9 @@ install_compose
 # ================== SETUP ==================
 mkdir -p /opt/pterodactyl/panel
 cd /opt/pterodactyl/panel
-
 mkdir -p data/{database,var,logs}
 
-# ================== DOCKER COMPOSE FILE ==================
+# ================== DOCKER COMPOSE ==================
 cat <<EOF > docker-compose.yml
 version: "3.8"
 
@@ -153,8 +135,8 @@ services:
     environment:
       MYSQL_DATABASE: panel
       MYSQL_USER: pterodactyl
-      MYSQL_PASSWORD: ${DB_PASS}
-      MYSQL_ROOT_PASSWORD: ${DB_PASS}
+      MYSQL_PASSWORD: "${DB_PASS}"
+      MYSQL_ROOT_PASSWORD: "${DB_PASS}"
     volumes:
       - ./data/database:/var/lib/mysql
 
@@ -169,17 +151,17 @@ services:
       - database
       - cache
     ports:
-      - "8030:80"
+      - "${PANEL_PORT}:80"
     environment:
-      APP_URL: ${APP_URL}
+      APP_URL: "${APP_URL}"
       APP_TIMEZONE: UTC
-      APP_SERVICE_AUTHOR: ${ADMIN_EMAIL}
+      APP_SERVICE_AUTHOR: "${ADMIN_EMAIL}"
       TRUSTED_PROXIES: "*"
       DB_HOST: database
       DB_PORT: 3306
       DB_DATABASE: panel
       DB_USERNAME: pterodactyl
-      DB_PASSWORD: ${DB_PASS}
+      DB_PASSWORD: "${DB_PASS}"
       CACHE_DRIVER: redis
       SESSION_DRIVER: redis
       QUEUE_DRIVER: redis
@@ -193,7 +175,6 @@ EOF
 # ================== START ==================
 echo "🚀 Iniciando containers..."
 $COMPOSE up -d
-
 sleep 10
 
 # ================== ADMIN ==================
@@ -206,21 +187,18 @@ $COMPOSE run --rm panel php artisan p:user:make \
   --admin=1
 
 # ================== CLOUDFLARED ==================
-if [[ "$USE_CF" =~ ^[Yy]$ ]]; then
+if [ "$USE_CF" = true ]; then
   echo "☁️ Instalando Cloudflared..."
-
-  if ! command -v cloudflared >/dev/null 2>&1; then
+  if ! command -v cloudflared >/dev/null; then
     curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-      -o cloudflared
-    chmod +x cloudflared
-    mv cloudflared /usr/local/bin/cloudflared
+      -o /usr/local/bin/cloudflared
+    chmod +x /usr/local/bin/cloudflared
   fi
-
   cloudflared tunnel run --token "$CLOUDFLARED_TOKEN" >/tmp/cloudflared.log 2>&1 &
 fi
 
 # ================== DONE ==================
 echo
 echo -e "${PURPLE}✅ Pterodactyl instalado com sucesso!${RESET}"
-echo -e "${PURPLE}🌐 Painel: http://localhost:8030${RESET}"
+echo -e "${PURPLE}🌐 Painel: ${APP_URL}${RESET}"
 echo -e "${PURPLE}☁️ Cloudflare ativo se configurado${RESET}"
